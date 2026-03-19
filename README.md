@@ -1,6 +1,6 @@
 # I love C++ (i-love-cpp)
 
-**Version:** 0.1.2
+**Version:** 0.1.3
 
 A lightweight, header-only C++ utility library with compatibility down to C++11.
 
@@ -16,8 +16,8 @@ It collects small, practical helpers that tend to go missing in older C++ standa
 ## Compatibility
 
 - **Language standard:** >= C++11
-- **Tested on:** Linux
-- **Windows support:** Partial (filesystem support is still incomplete)
+- **Tested on:** Linux, Windows
+- **System support:** Linux, Windows
 
 ## Integration
 
@@ -74,6 +74,8 @@ int main() {
 * **`replaceAll`** - Replaces all occurrences of a substring in-place.
 * **`toLower`** - Converts a string to lowercase in-place.
 * **`toLowerCopy`** - Converts a string to lowercase.
+* **`isNullOrEmpty`** - Checks whether a string (or string pointer) is null or empty.
+* **`isNullOrWhiteSpace`** - Checks whether a string (or string pointer) is null or contains only whitespace.
 
 ### File Utilities (`ilc::files::`)
 

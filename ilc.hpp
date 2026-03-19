@@ -1,4 +1,4 @@
-// Version: 0.1.2
+// Version: 0.1.3
 
 #ifndef I_LOVE_CPP_HPP
 #define I_LOVE_CPP_HPP
@@ -20,9 +20,12 @@
 #include <utility>
 #include <vector>
 #include <cstring>
+#include <memory>
 
 #ifdef OS_LINUX
 #include <unistd.h>
+#elif OS_WINDOWS
+#include <windows.h>
 #endif
 
 namespace ilc {
@@ -50,6 +53,130 @@ inline void fixMinMax(T &min_val, T &max_val) {
         std::swap(min_val, max_val);
     }
 }
+
+#ifdef OS_WINDOWS
+/**
+ * @brief Converts a UTF-8 encoded string to a wide (UTF-16) string.
+ *
+ * @param str The UTF-8 encoded source string.
+ * @return std::wstring The converted UTF-16 wide string, or an empty
+ * string if the input is empty.
+ */
+inline std::wstring toWideString(const std::string& str) {
+    if (str.empty()) return L"";
+
+    int requiredSize = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
+    std::wstring result(requiredSize - 1, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &result[0], requiredSize);
+    return result;
+}
+
+/**
+ * @brief Resolves the final path of an existing file or directory.
+ *
+ * Uses CreateFileW and GetFinalPathNameByHandleW to resolve symlinks,
+ * junctions, and other reparse points to their actual target path.
+ * The returned path is stripped of extended-length prefixes ("\\?\" and
+ * "\\?\UNC\") to produce a conventional format compatible with _stat64.
+ *
+ * @param path The file system path to resolve (UTF-8 encoded).
+ * @return std::string The resolved path in UTF-8, or an empty string on failure.
+ */
+inline std::string getResolvedTargetPath(const std::string& path) {
+    const std::wstring widePath = details::toWideString(path);
+
+    // RAII wrapper to guarantee handle cleanup on any exit path
+    std::unique_ptr<void, decltype(&CloseHandle)> handle(
+        CreateFileW(
+            widePath.c_str(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            nullptr
+        ),
+        CloseHandle
+    );
+
+    if (handle.get() == INVALID_HANDLE_VALUE) {
+        handle.release();
+        return "";
+    }
+
+    const DWORD requiredSize = GetFinalPathNameByHandleW(
+        handle.get(),
+        nullptr,
+        0,
+        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS
+    );
+
+    if (requiredSize == 0) {
+        return "";
+    }
+
+    std::vector<WCHAR> buffer(requiredSize + 1, L'\0');
+
+    const DWORD actualSize = GetFinalPathNameByHandleW(
+        handle.get(),
+        buffer.data(),
+        static_cast<DWORD>(buffer.size()),
+        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS
+    );
+
+    if (actualSize == 0) {
+        return "";
+    }
+
+    std::wstring resolvedPath(buffer.data(), actualSize);
+
+    // Strip extended-length prefixes so the path works with _stat64.
+    // "\\?\UNC\server\share\..." -> "\\server\share\..."
+    // "\\?\C:\..." -> "C:\..."
+    static const std::wstring uncPathPrefix = L"\\\\?\\UNC\\";
+    static const std::wstring longPathPrefix = L"\\\\?\\";
+
+    if (resolvedPath.compare(0, uncPathPrefix.size(), uncPathPrefix) == 0) {
+        resolvedPath = L"\\\\" + resolvedPath.substr(uncPathPrefix.size());
+    } else if (resolvedPath.compare(0, longPathPrefix.size(), longPathPrefix) == 0) {
+        resolvedPath.erase(0, longPathPrefix.size());
+    }
+
+    const int utf8Size = WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        resolvedPath.c_str(),
+        static_cast<int>(resolvedPath.size()),
+        nullptr,
+        0,
+        nullptr,
+        nullptr
+    );
+
+    if (utf8Size <= 0) {
+        return "";
+    }
+
+    std::string result(static_cast<size_t>(utf8Size), '\0');
+
+    const int convertedSize = WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        resolvedPath.c_str(),
+        static_cast<int>(resolvedPath.size()),
+        &result[0],
+        utf8Size,
+        nullptr,
+        nullptr
+    );
+
+    if (convertedSize <= 0) {
+        return "";
+    }
+
+    return result;
+}
+#endif
 
 } // namespace details
 
@@ -422,6 +549,50 @@ inline std::string toLowerCopy(std::string text) {
     return text;
 }
 
+/**
+ * @brief Checks whether the given string pointer is null or points to an empty string.
+ *
+ * @param text Pointer to the string to check.
+ * @return True if the pointer is null or the string is empty; otherwise false.
+ */
+inline bool isNullOrEmpty(const std::string* text) {
+    return text == nullptr || text->empty();
+}
+
+/**
+ * @brief Checks whether the given string is empty.
+ *
+ * @param text String to check.
+ * @return True if the string is empty; otherwise false.
+ */
+inline bool isNullOrEmpty(const std::string& text) {
+    return text.empty();
+}
+
+/**
+ * @brief Checks whether the given string pointer is null or contains only whitespace characters.
+ *
+ * @param text Pointer to the string to check.
+ * @return True if the pointer is null or the string contains only whitespace characters; otherwise false.
+ */
+inline bool isNullOrWhiteSpace(const std::string* text) {
+    return text == nullptr || std::all_of(text->begin(), text->end(), [](unsigned char ch) {
+        return std::isspace(ch);
+    });
+}
+
+/**
+ * @brief Checks whether the given string contains only whitespace characters.
+ *
+ * @param text String to check.
+ * @return True if the string is empty or contains only whitespace characters; otherwise false.
+ */
+inline bool isNullOrWhiteSpace(const std::string& text) {
+    return std::all_of(text.begin(), text.end(), [](unsigned char ch) {
+        return std::isspace(ch);
+    });
+}
+
 // #############################################################
 // #               FILE UTILITIES                              #
 // #############################################################
@@ -447,6 +618,68 @@ enum class PathType {
 };
 
 #ifdef OS_WINDOWS
+/**
+ * @brief Retrieves the file system path type.
+ *
+ * Uses _stat64 and FindFirstFileW to determine if the given path is a
+ * file, directory, symlink, or other specialized file type. It also detects
+ * broken symlinks and permission errors.
+ *
+ * @note This function doesn't detect BlockDevice, Socket and SymlinkLoop.
+ *
+ * @param path The file system path to check.
+ * @param follow_symlink If true, follows symlinks to check the target's type.
+ * If false, returns PathType::Symlink for symbolic links.
+ *
+ * @return PathType representing the type of the path or the specific error
+ * encountered.
+ */
+inline PathType getType(const std::string &path,
+                        const bool follow_symlink = false) {
+    struct _stat64 file_info{};
+    const int stat_result = _stat64(path.c_str(), &file_info);
+
+    if (stat_result < 0) {
+        const int err = errno;
+        if (err == ENOENT) {
+            return PathType::NotFound;
+        } else if (_access(path.c_str(), 0) != 0) {
+            return PathType::PermissionError;
+        }
+
+        return PathType::Error;
+    }
+
+    std::wstring path_wide = details::toWideString(path);
+    WIN32_FIND_DATAW find_data{};
+    const HANDLE find_handle = FindFirstFileW(path_wide.c_str(), &find_data);
+    bool is_symlink = false;
+    
+     if (find_handle != INVALID_HANDLE_VALUE) {
+        FindClose(find_handle);
+        is_symlink = (find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && find_data.dwReserved0 == IO_REPARSE_TAG_SYMLINK;
+    }
+
+    if (!follow_symlink && is_symlink) {
+            return PathType::Symlink;
+    } else if (is_symlink) {
+        const std::string targetPath = details::getResolvedTargetPath(path);
+        if (isNullOrEmpty(targetPath)) {
+            return PathType::BrokenSymlink;
+        }
+
+        return getType(targetPath, true);
+    }
+
+    switch (file_info.st_mode & S_IFMT) {
+        case S_IFREG:  return PathType::File;
+        case S_IFDIR:  return PathType::Directory;
+        case S_IFIFO:  return PathType::Pipe;
+        case S_IFCHR:  return PathType::CharDevice;
+        default:       return PathType::Other;
+    }
+}
+
 #elif OS_LINUX
 
 /**
