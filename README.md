@@ -1,6 +1,6 @@
 # I love C++ (i-love-cpp)
 
-**Version:** 0.1.1
+**Version:** 0.1.2
 
 A lightweight, header-only C++ utility library with compatibility down to C++11.
 
@@ -15,7 +15,7 @@ It collects small, practical helpers that tend to go missing in older C++ standa
 
 ## Compatibility
 
-- **Language standard:** C++11+
+- **Language standard:** >= C++11
 - **Tested on:** Linux
 - **Windows support:** Partial (filesystem support is still incomplete)
 

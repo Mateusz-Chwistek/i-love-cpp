@@ -1,4 +1,4 @@
-// Version: 0.1.1
+// Version: 0.1.2
 
 #ifndef I_LOVE_CPP_HPP
 #define I_LOVE_CPP_HPP
@@ -206,32 +206,38 @@ inline bool isInRange(T value, T min_val, T max_val) {
  *
  * @return None (modifies @p text in-place).
  *
- * @throws None (does not allocate; uses iterator-based erase).
+ * @throws None (does not allocate; uses index-based erase).
  */
-inline void trim(std::string &text) {
-    // Manual lambda check, faster than std::isspace, but less reliable
-    bool (*isNotSpace)(char) = [](char character) -> bool {
-        return !(character == ' ' || character == '\n' || character == '\r' ||
-                 character == '\t' || character == '\v' || character == '\f');
+inline void trim(std::string& text) {
+    // Manual lambda check, faster than std::isspace, but ignores locale
+    bool (*isSpace)(char) = [](char character) -> bool {
+        return character == ' ' || character == '\n' || character == '\r' ||
+               character == '\t' || character == '\v' || character == '\f';
     };
 
+    std::size_t start_index = 0;
+
     // Find the first non-whitespace character from the beginning
-    std::string::iterator start_iterator =
-        std::find_if(text.begin(), text.end(), isNotSpace);
+    while (start_index < text.size() && isSpace(text[start_index])) {
+        start_index++;
+    }
 
     // If the string contains only whitespaces or is empty, clear it
-    if (start_iterator == text.end()) {
+    if (start_index == text.size()) {
         text.clear();
         return;
     }
 
-    // Find the first non-whitespace character from the end
-    // The base() method converts reverse iterator to normal
-    std::string::iterator end_iterator =
-        std::find_if(text.rbegin(), text.rend(), isNotSpace).base();
+    std::size_t end_index = text.size();
 
-    text.erase(end_iterator, text.end());
-    text.erase(text.begin(), start_iterator);
+    // Find the last non-whitespace character from the end
+    while (end_index > start_index && isSpace(text[end_index - 1])) {
+        end_index--;
+    }
+
+    // Remove trailing and leading whitespaces
+    text.erase(end_index);
+    text.erase(0, start_index);
 }
 
 /**
@@ -258,7 +264,7 @@ inline void trim(std::string &text) {
  * if the resulting string would exceed max_size().
  */
 inline void replaceAll(std::string &text, const std::string &old_substr,
-                       const std::string &new_substr) {
+                          const std::string &new_substr) {
     if (old_substr.empty() || text.empty()) {
         return;
     }
@@ -266,31 +272,63 @@ inline void replaceAll(std::string &text, const std::string &old_substr,
     std::size_t text_length = text.size(), old_sub_len = old_substr.size(),
                 new_sub_len = new_substr.size();
 
-    // Avoid memory reallocations in string
-    if (old_sub_len == new_sub_len) {
-        std::size_t pos = 0;
+    // Locates substr within data using memchr for the first byte,
+    // then memcmp to verify the remaining bytes.
+    auto memFind = [](const char *data, std::size_t data_len,
+                      const char *substr,
+                      std::size_t substr_len) -> const char * {
+        if (substr_len > data_len) {
+            return nullptr;
+        }
+        const char *end = data + data_len - substr_len + 1;
+        const char *pos = data;
+        while (pos < end) {
+            pos = static_cast<const char *>(
+                std::memchr(pos, substr[0], static_cast<std::size_t>(end - pos)));
+            if (!pos) {
+                return nullptr;
+            }
+            if (std::memcmp(pos, substr, substr_len) == 0) {
+                return pos;
+            }
+            ++pos;
+        }
+        return nullptr;
+    };
 
-        // Replace all occurrences of old_substr with new_substr.
-        while ((pos = text.find(old_substr, pos)) != std::string::npos) {
+    const char *text_data = text.data();
+    const char *old_data = old_substr.data();
+
+    // Equal-length fast path: replace in-place without allocating a new string
+    if (old_sub_len == new_sub_len) {
+        const char *found = text_data;
+
+        while ((found = memFind(found, text_length - (found - text_data),
+                                old_data, old_sub_len)) != nullptr) {
+            std::size_t pos = static_cast<std::size_t>(found - text_data);
             text.replace(pos, old_sub_len, new_substr);
-            pos += new_sub_len;
+            // .replace() may reallocate, so refresh the pointer
+            text_data = text.data();
+            found = text_data + pos + new_sub_len;
         }
         return;
     }
 
     std::string result;
-    std::size_t reserve_size = text_length, start_pos = 0, match_pos = 0;
+    std::size_t reserve_size = text_length, start_pos = 0;
+    const char *found = nullptr;
+
+    // Large text path: count occurrences first to reserve exact memory
     if (text_length >= 4096) {
         size_t occurrences = 0;
-        size_t pos = 0;
+        const char *scan = text_data;
 
-        while ((pos = text.find(old_substr, pos)) != std::string::npos) {
+        while ((scan = memFind(scan, text_length - (scan - text_data),
+                               old_data, old_sub_len)) != nullptr) {
             occurrences++;
-            pos += old_sub_len;
+            scan += old_sub_len;
         }
 
-        // Lazy evaluation: if substring is not found, do nothing and exit
-        // early
         if (occurrences == 0) {
             return;
         }
@@ -301,20 +339,21 @@ inline void replaceAll(std::string &text, const std::string &old_substr,
         }
         result.reserve(reserve_size);
 
-        // Build the new string with replacements
-        while ((match_pos = text.find(old_substr, start_pos)) !=
-               std::string::npos) {
+        // Build the result by appending segments between matches
+        while ((found = memFind(text_data + start_pos,
+                                text_length - start_pos,
+                                old_data, old_sub_len)) != nullptr) {
+            std::size_t match_pos = static_cast<std::size_t>(found - text_data);
             result.append(text, start_pos, match_pos - start_pos);
             result.append(new_substr);
             start_pos = match_pos + old_sub_len;
         }
     } else {
-        match_pos = text.find(old_substr, 0);
-        if (match_pos == std::string::npos) {
-            return; // Substring not found
+        // Small text path: skip counting, reserve with 50% overhead instead
+        found = memFind(text_data, text_length, old_data, old_sub_len);
+        if (!found) {
+            return;
         }
-        // Allocate an extra 50% of memory only if the new substring is
-        // longer
         if (new_sub_len > old_sub_len) {
             std::size_t extra_space = text_length / 2;
             reserve_size = (result.max_size() - text_length < extra_space)
@@ -324,15 +363,17 @@ inline void replaceAll(std::string &text, const std::string &old_substr,
         result.reserve(reserve_size);
 
         do {
+            std::size_t match_pos = static_cast<std::size_t>(found - text_data);
             result.append(text, start_pos, match_pos - start_pos);
             result.append(new_substr);
             start_pos = match_pos + old_sub_len;
 
-            match_pos = text.find(old_substr, start_pos);
-        } while (match_pos != std::string::npos);
+            found = memFind(text_data + start_pos, text_length - start_pos,
+                            old_data, old_sub_len);
+        } while (found != nullptr);
     }
 
-    // Append any remaining characters after the last match
+    // Append the tail after the last match
     result.append(text, start_pos, std::string::npos);
 
     // Transfer the new string data back to the original text variable
