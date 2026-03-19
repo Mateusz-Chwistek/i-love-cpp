@@ -1,6 +1,6 @@
 # I love C++ (i-love-cpp)
 
-**Version:** 0.1.0
+**Version:** 0.1.1
 
 A lightweight, header-only C++ utility library with compatibility down to C++11.
 
@@ -73,6 +73,7 @@ int main() {
 * **`trim`** - Removes ASCII whitespace from both ends of a string in-place.
 * **`replaceAll`** - Replaces all occurrences of a substring in-place.
 * **`toLower`** - Converts a string to lowercase in-place.
+* **`toLowerCopy`** - Converts a string to lowercase.
 
 ### File Utilities (`ilc::files::`)
 

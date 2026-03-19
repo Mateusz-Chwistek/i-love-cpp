@@ -1,4 +1,4 @@
-// Version: 0.1.0
+// Version: 0.1.1
 
 #ifndef I_LOVE_CPP_HPP
 #define I_LOVE_CPP_HPP
@@ -10,15 +10,16 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
+#include <stdexcept>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <type_traits>
 #include <utility>
 #include <vector>
-#include <stdexcept>
-#include <cctype>
+#include <cstring>
 
 #ifdef OS_LINUX
 #include <unistd.h>
@@ -44,7 +45,7 @@ namespace details {
  * @param max_val Reference to the upper bound value.
  */
 template <typename T, EnableIfArithmetic<T> = 0>
-inline void fixMinMax(T& min_val, T& max_val) {
+inline void fixMinMax(T &min_val, T &max_val) {
     if (max_val < min_val) {
         std::swap(min_val, max_val);
     }
@@ -82,6 +83,9 @@ split(const std::string &text, char delimiter = ' ', bool allow_empty = true) {
         return {};
     }
 
+    const char *const data = text.data();
+    const char *const end = data + text_length;
+
     std::vector<std::string> result;
     if (text_length <= 4096) {
         // Heuristic capacity guess: (text_length / 7) ~ "average token length"
@@ -93,39 +97,41 @@ split(const std::string &text, char delimiter = ' ', bool allow_empty = true) {
     }
 
     if (allow_empty) {
-        std::size_t start_pos = 0;
+        const char *segment = data;
         while (true) {
-            std::size_t end_pos = text.find(delimiter, start_pos);
-            if (end_pos == std::string::npos) {
+            const char *hit = static_cast<const char *>(
+                std::memchr(segment, delimiter, end - segment));
+
+            if (!hit) {
                 // add the last token (can be empty, including trailing
                 // delimiter case)
-                result.emplace_back(text.data() + start_pos,
-                                    text_length - start_pos);
+                result.emplace_back(segment, end);
                 break;
             }
 
-            // add token even if empty (end_pos == start_pos)
-            result.emplace_back(text.data() + start_pos, end_pos - start_pos);
-            start_pos = end_pos + 1;
+            // add token even if empty (hit == segment)
+            result.emplace_back(segment, hit);
+            segment = hit + 1;
         }
     } else {
-        std::size_t start_pos = 0, end_pos = 0;
-        while ((end_pos = text.find(delimiter, start_pos)) !=
-               std::string::npos) {
-            // Skip empty token (end_pos == start_pos), e.g. for ",a", "a,",
+        const char *segment = data;
+        const char *hit;
+
+        while ((hit = static_cast<const char *>(
+                    std::memchr(segment, delimiter, end - segment)))) {
+
+            // Skip empty token (hit == segment), e.g. for ",a", "a,",
             // "a,,b"
-            if (end_pos > start_pos) {
-                result.emplace_back(text.data() + start_pos,
-                                    end_pos - start_pos);
+            if (hit > segment) {
+                result.emplace_back(segment, hit);
             }
-            start_pos = end_pos + 1;
+            segment = hit + 1;
         }
 
         // add the last token only if non-empty (also skips trailing delimiter
         // case)
-        if (start_pos < text_length) {
-            result.emplace_back(text.data() + start_pos,
-                                text_length - start_pos);
+        if (segment < end) {
+            result.emplace_back(segment, end);
         }
     }
 
@@ -342,39 +348,61 @@ inline void replaceAll(std::string &text, const std::string &old_substr,
  * @param text String to be modified in-place. Safe for a single thread,
  * or multiple threads that do not modify `text` concurrently.
  */
-inline void toLower(std::string& text) {
+inline void toLower(std::string &text) {
     if (text.empty()) {
         return;
     }
 
     std::transform(text.begin(), text.end(), text.begin(),
-        [](unsigned char character) {
-            return static_cast<char>(std::tolower(character));
-        });
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+}
+
+/**
+ * @brief Returns a lowercase copy of the given string.
+ *
+ * Creates a copy of the input string and converts each character to
+ * lowercase using std::tolower.
+ *
+ * @param text String to copy and convert to lowercase.
+ * @return Lowercase copy of the input string.
+ */
+inline std::string toLowerCopy(std::string text) {
+    if (text.empty()) {
+        return text;
+    }
+
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+
+    return text;
 }
 
 // #############################################################
 // #               FILE UTILITIES                              #
 // #############################################################
 namespace files {
-    
+
 /**
  * @brief Represents the type or status of a file system path.
  */
 enum class PathType {
-    NotFound,         ///< The path does not exist.
-    File,             ///< A regular file.
-    Directory,        ///< A directory.
-    Symlink,          ///< A symbolic link.
-    BrokenSymlink,    ///< A symbolic link that points to a non-existent target.
-    SymlinkLoop,      ///< A symbolic link loop was detected during resolution.
-    CharDevice,       ///< A character special file (device).
-    BlockDevice,      ///< A block special file (device).
-    Pipe,             ///< A FIFO special file (named pipe).
-    Socket,           ///< A local (UNIX domain) socket.
-    Other,            ///< An unknown or unsupported file type.
-    Error,            ///< A general system error occurred during the check.
-    PermissionError   ///< Access denied (insufficient permissions).
+    NotFound,       ///< The path does not exist.
+    File,           ///< A regular file.
+    Directory,      ///< A directory.
+    Symlink,        ///< A symbolic link.
+    BrokenSymlink,  ///< A symbolic link that points to a non-existent target.
+    SymlinkLoop,    ///< A symbolic link loop was detected during resolution.
+    CharDevice,     ///< A character special file (device).
+    BlockDevice,    ///< A block special file (device).
+    Pipe,           ///< A FIFO special file (named pipe).
+    Socket,         ///< A local (UNIX domain) socket.
+    Other,          ///< An unknown or unsupported file type.
+    Error,          ///< A general system error occurred during the check.
+    PermissionError ///< Access denied (insufficient permissions).
 };
 
 #ifdef OS_WINDOWS
@@ -384,18 +412,19 @@ enum class PathType {
  * @brief Retrieves the file system path type.
  *
  * Uses stat/lstat to determine if the given path is a file, directory, symlink,
- * or other specialized file type. It also detects broken symlinks, symlink loops,
- * and permission errors.
+ * or other specialized file type. It also detects broken symlinks, symlink
+ * loops, and permission errors.
  *
  * @param path The file system path to check.
  * @param follow_symlink If true, follows symlinks to check the target's type.
  * If false, returns PathType::Symlink for symbolic links.
  *
- * @return PathType representing the type of the path or the specific error encountered.
+ * @return PathType representing the type of the path or the specific error
+ * encountered.
  */
 inline PathType getType(const std::string &path,
                         const bool follow_symlink = false) {
-    struct stat file_info {};
+    struct stat file_info{};
 
     // Use stat() to follow symlinks, lstat() to check the link itself
     const int stat_result = follow_symlink ? ::stat(path.c_str(), &file_info)
@@ -464,11 +493,13 @@ inline PathType getType(const std::string &path,
  * the function throws an exception instead of silently returning false.
  *
  * @param path The file system path to check.
- * @param strict Determines whether to follow symlinks (passed as `follow_symlink` to `getType`).
+ * @param strict Determines whether to follow symlinks (passed as
+ * `follow_symlink` to `getType`).
  *
  * @return true if the path exists, false if it is not found.
  *
- * @throws std::runtime_error If a file system error occurs (e.g., permission denied, broken symlink, loop).
+ * @throws std::runtime_error If a file system error occurs (e.g., permission
+ * denied, broken symlink, loop).
  */
 inline bool exists(const std::string &path, const bool strict = false) {
     PathType type = getType(path, strict);
