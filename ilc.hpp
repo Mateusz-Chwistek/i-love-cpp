@@ -1,4 +1,4 @@
-// Version: 0.1.4
+// Version: 0.2.4
 
 #ifndef I_LOVE_CPP_HPP
 #define I_LOVE_CPP_HPP
@@ -21,6 +21,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <locale>
 
 #ifdef OS_LINUX
 #include <unistd.h>
@@ -116,12 +117,35 @@ inline void joinImpl(const std::string &separator, std::string &result,
  */
 inline std::wstring toWideString(const std::string &str) {
     if (str.empty())
-        return L"";
+        return {};
 
     int requiredSize =
         MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
     std::wstring result(requiredSize - 1, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &result[0], requiredSize);
+    return result;
+}
+
+/**
+ * @brief Converts a wide (UTF-16) string to a UTF-8 encoded string.
+ *
+ * @param wstr The UTF-16 wide source string.
+ * @return std::string The converted UTF-8 string, or an empty
+ * string if the input is empty.
+ */
+inline std::string toNormalString(const std::wstring &wstr) {
+    if (wstr.empty()) {
+        return {};
+    }
+
+    int size = WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
+                                   static_cast<int>(wstr.size()), nullptr, 0,
+                                   nullptr, nullptr);
+
+    std::string result(size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()),
+                        &result[0], size, nullptr, nullptr);
+
     return result;
 }
 
@@ -605,89 +629,92 @@ inline void replaceAll(std::string &text, const std::string &old_substr,
     text.swap(result);
 }
 
-/**
- * @brief Converts all characters in a string to lowercase in-place.
- *
- * This function uses std::tolower, which is locale-aware and supports
- * extended character sets depending on the current global locale.
- *
- * @param text String to be modified in-place. Safe for a single thread,
- * or multiple threads that do not modify `text` concurrently.
- */
-inline void toLower(std::string &text) {
-    if (text.empty()) {
-        return;
-    }
-
-    std::transform(text.begin(), text.end(), text.begin(),
-                   [](unsigned char character) {
-                       return static_cast<char>(std::tolower(character));
-                   });
-}
-
+#ifdef OS_WINDOWS
 /**
  * @brief Returns a lowercase copy of the given string.
  *
- * Creates a copy of the input string and converts each character to
- * lowercase using std::tolower.
+ * Converts the input string to UTF-16, applies CharLowerW,
+ * and converts back to UTF-8.
  *
- * @param text String to copy and convert to lowercase.
+ * @param text String to convert to lowercase.
  * @return Lowercase copy of the input string.
  */
-inline std::string toLowerCopy(std::string text) {
+inline std::string toLower(std::string text) {
     if (text.empty()) {
-        return text;
+        return {};
     }
 
-    std::transform(text.begin(), text.end(), text.begin(),
-                   [](unsigned char character) {
-                       return static_cast<char>(std::tolower(character));
-                   });
-
-    return text;
-}
-
-/**
- * @brief Converts all characters in a string to uppercase in-place.
- *
- * This function uses std::toupper, which is locale-aware and supports
- * extended character sets depending on the current global locale.
- *
- * @param text String to be modified in-place. Safe for a single thread,
- * or multiple threads that do not modify `text` concurrently.
- */
-inline void toUpper(std::string &text) {
-    if (text.empty()) {
-        return;
-    }
-
-    std::transform(text.begin(), text.end(), text.begin(),
-                   [](unsigned char character) {
-                       return static_cast<char>(std::toupper(character));
-                   });
+    std::wstring text_wstr = details::toWideString(text);
+    CharLowerW(&text_wstr[0]);
+    return details::toNormalString(text_wstr);
 }
 
 /**
  * @brief Returns an uppercase copy of the given string.
  *
- * Creates a copy of the input string and converts each character to
- * uppercase using std::toupper.
+ * Converts the input string to UTF-16, applies CharUpperW,
+ * and converts back to UTF-8.
  *
- * @param text String to copy and convert to uppercase.
+ * @param text String to convert to uppercase.
  * @return Uppercase copy of the input string.
  */
-inline std::string toUpperCopy(std::string text) {
+inline std::string toUpper(std::string text) {
+    if (text.empty()) {
+        return text;
+    }
+
+    std::wstring text_wstr = details::toWideString(text);
+    CharUpperW(&text_wstr[0]);
+    return details::toNormalString(text_wstr);
+}
+
+#elif OS_LINUX
+
+/**
+ * @brief Returns a lowercase copy of the given string.
+ *
+ * Converts each character to lowercase using std::tolower
+ * with the system locale (std::locale("")).
+ *
+ * @param text String to convert to lowercase.
+ * @return Lowercase copy of the input string.
+ */
+inline std::string toLower(std::string text) {
     if (text.empty()) {
         return text;
     }
 
     std::transform(text.begin(), text.end(), text.begin(),
-                   [](unsigned char character) {
-                       return static_cast<char>(std::toupper(character));
+                   [](char character) {
+                       return std::tolower(character, std::locale(""));
                    });
 
     return text;
 }
+
+/**
+ * @brief Returns an uppercase copy of the given string.
+ *
+ * Converts each character to uppercase using std::toupper
+ * with the system locale (std::locale("")).
+ *
+ * @param text String to convert to uppercase.
+ * @return Uppercase copy of the input string.
+ */
+inline std::string toUpper(std::string text) {
+    if (text.empty()) {
+        return text;
+    }
+
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](char character) {
+                        return std::toupper(character, std::locale(""));
+                   });
+
+    return text;
+}
+
+#endif
 
 /**
  * @brief Checks whether the given string pointer is null or points to an empty
@@ -771,6 +798,19 @@ inline std::string joinCopy(const std::string &separator, Args... texts) {
     details::joinImpl(separator, result, texts...);
     return result;
 }
+
+/*inline bool isStringEqual(const std::string &text1, const std::string &text2,
+bool case_insensitive=true) { if (text1.size() != text2.size()) { return false;
+    } else if (case_insensitive) {
+       return std::equal(text1.begin(), text1.end(), text2.begin(),
+            [](char a, char b) {
+                return std::tolower(static_cast<unsigned char>(a)) ==
+                       std::tolower(static_cast<unsigned char>(b));
+            });
+    }
+
+    return text1 == text2;
+}*/
 
 // #############################################################
 // #               FILE UTILITIES                              #

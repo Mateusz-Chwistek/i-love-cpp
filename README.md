@@ -1,6 +1,6 @@
 # I love C++ (i-love-cpp)
 
-**Version:** 0.1.4
+**Version:** 0.2.4
 
 A lightweight, header-only C++ utility library with compatibility down to C++11.
 
@@ -66,6 +66,9 @@ int main() {
 ## Available Functions
 
 ### General Utilities (`ilc::`)
+> ℹ️ **INFO**
+> On Linux, `toLower` and `toUpper` only support the **active system locale**. For full multi-locale or Unicode-aware case conversion, an external library such as Boost.Locale or ICU is required.
+> On Windows, conversion is handled via the Win32 API (`CharLowerW`/`CharUpperW`) and should work correctly across locales.
 
 * **`split`** - Splits a string into tokens using a single-character delimiter.
 * **`clamp`** - Restricts a numeric value to a given inclusive range.
@@ -74,10 +77,8 @@ int main() {
 * **`ltrim`** - Removes leading ASCII whitespace from a string in-place.
 * **`rtrim`** - Removes trailing ASCII whitespace from a string in-place.
 * **`replaceAll`** - Replaces all occurrences of a substring in-place.
-* **`toLower`** - Converts a string to lowercase in-place.
-* **`toLowerCopy`** - Converts a string to lowercase.
-* **`toUpper`** - Converts a string to uppercase in-place.
-* **`toUpperCopy`** - Converts a string to uppercase.
+* **`toLower`** - Converts a string to lowercase.
+* **`toUpper`** - Converts a string to uppercase.
 * **`isNullOrEmpty`** - Checks whether a string (or string pointer) is null or empty.
 * **`isNullOrWhiteSpace`** - Checks whether a string (or string pointer) is null or contains only whitespace.
 * **`join`** - Appends text elements to an existing string with a separator, skipping empty elements.
