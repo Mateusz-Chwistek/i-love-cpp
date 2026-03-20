@@ -1,4 +1,4 @@
-// Version: 0.1.3
+// Version: 0.1.4
 
 #ifndef I_LOVE_CPP_HPP
 #define I_LOVE_CPP_HPP
@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
@@ -19,8 +21,6 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
-#include <cstring>
-#include <memory>
 
 #ifdef OS_LINUX
 #include <unistd.h>
@@ -34,6 +34,23 @@ namespace ilc {
 template <typename T>
 using EnableIfArithmetic =
     typename std::enable_if<std::is_arithmetic<T>::value, int>::type;
+
+template <typename... Args> struct all_convertible_to_string;
+
+template <> struct all_convertible_to_string<> : std::true_type {};
+
+template <typename First, typename... Rest>
+struct all_convertible_to_string<First, Rest...>
+    : std::integral_constant<
+          bool, std::is_convertible<typename std::decay<First>::type,
+                                    std::string>::value &&
+                    all_convertible_to_string<Rest...>::value> {};
+
+// Common constraint alias
+template <typename... Args>
+using EnableIfConvertibleToString =
+    typename std::enable_if<all_convertible_to_string<Args...>::value,
+                            int>::type;
 
 // #############################################################
 // #                   HELPERS                                 #
@@ -54,6 +71,41 @@ inline void fixMinMax(T &min_val, T &max_val) {
     }
 }
 
+/**
+ * @brief Base case - appends the last text element to result.
+ *
+ * @param separator Delimiter inserted between non-empty elements.
+ * @param result Accumulator string to append to.
+ * @param text Last text element to append.
+ */
+inline void joinImpl(const std::string &separator, std::string &result,
+                     const std::string &text) {
+    result += text;
+}
+
+/**
+ * @brief Recursively joins text elements into result, separated by separator.
+ *        Empty strings are skipped.
+ *
+ * @tparam Args Types convertible to std::string.
+ * @param separator Delimiter inserted between non-empty elements.
+ * @param result Accumulator string to append to.
+ * @param text Current text element to process.
+ * @param rest Remaining text elements.
+ */
+template <typename... Args, EnableIfConvertibleToString<Args...> = 0>
+inline void joinImpl(const std::string &separator, std::string &result,
+                     const std::string &text, Args... rest) {
+    if (!text.empty()) {
+        if (!result.empty()) {
+            result += separator + text;
+        } else {
+            result += text;
+        }
+    }
+    joinImpl(separator, result, rest...);
+}
+
 #ifdef OS_WINDOWS
 /**
  * @brief Converts a UTF-8 encoded string to a wide (UTF-16) string.
@@ -62,10 +114,12 @@ inline void fixMinMax(T &min_val, T &max_val) {
  * @return std::wstring The converted UTF-16 wide string, or an empty
  * string if the input is empty.
  */
-inline std::wstring toWideString(const std::string& str) {
-    if (str.empty()) return L"";
+inline std::wstring toWideString(const std::string &str) {
+    if (str.empty())
+        return L"";
 
-    int requiredSize = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
+    int requiredSize =
+        MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
     std::wstring result(requiredSize - 1, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &result[0], requiredSize);
     return result;
@@ -80,52 +134,40 @@ inline std::wstring toWideString(const std::string& str) {
  * "\\?\UNC\") to produce a conventional format compatible with _stat64.
  *
  * @param path The file system path to resolve (UTF-8 encoded).
- * @return std::string The resolved path in UTF-8, or an empty string on failure.
+ * @return std::string The resolved path in UTF-8, or an empty string on
+ * failure.
  */
-inline std::string getResolvedTargetPath(const std::string& path) {
+inline std::string getResolvedTargetPath(const std::string &path) {
     const std::wstring widePath = details::toWideString(path);
 
     // RAII wrapper to guarantee handle cleanup on any exit path
     std::unique_ptr<void, decltype(&CloseHandle)> handle(
-        CreateFileW(
-            widePath.c_str(),
-            0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
-            nullptr
-        ),
-        CloseHandle
-    );
+        CreateFileW(widePath.c_str(), 0,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS,
+                    nullptr),
+        CloseHandle);
 
     if (handle.get() == INVALID_HANDLE_VALUE) {
         handle.release();
-        return "";
+        return {};
     }
 
     const DWORD requiredSize = GetFinalPathNameByHandleW(
-        handle.get(),
-        nullptr,
-        0,
-        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS
-    );
+        handle.get(), nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
 
     if (requiredSize == 0) {
-        return "";
+        return {};
     }
 
     std::vector<WCHAR> buffer(requiredSize + 1, L'\0');
 
     const DWORD actualSize = GetFinalPathNameByHandleW(
-        handle.get(),
-        buffer.data(),
-        static_cast<DWORD>(buffer.size()),
-        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS
-    );
+        handle.get(), buffer.data(), static_cast<DWORD>(buffer.size()),
+        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
 
     if (actualSize == 0) {
-        return "";
+        return {};
     }
 
     std::wstring resolvedPath(buffer.data(), actualSize);
@@ -138,40 +180,27 @@ inline std::string getResolvedTargetPath(const std::string& path) {
 
     if (resolvedPath.compare(0, uncPathPrefix.size(), uncPathPrefix) == 0) {
         resolvedPath = L"\\\\" + resolvedPath.substr(uncPathPrefix.size());
-    } else if (resolvedPath.compare(0, longPathPrefix.size(), longPathPrefix) == 0) {
+    } else if (resolvedPath.compare(0, longPathPrefix.size(), longPathPrefix) ==
+               0) {
         resolvedPath.erase(0, longPathPrefix.size());
     }
 
     const int utf8Size = WideCharToMultiByte(
-        CP_UTF8,
-        0,
-        resolvedPath.c_str(),
-        static_cast<int>(resolvedPath.size()),
-        nullptr,
-        0,
-        nullptr,
-        nullptr
-    );
+        CP_UTF8, 0, resolvedPath.c_str(), static_cast<int>(resolvedPath.size()),
+        nullptr, 0, nullptr, nullptr);
 
     if (utf8Size <= 0) {
-        return "";
+        return {};
     }
 
-    std::string result(static_cast<size_t>(utf8Size), '\0');
+    std::string result(static_cast<std::size_t>(utf8Size), '\0');
 
     const int convertedSize = WideCharToMultiByte(
-        CP_UTF8,
-        0,
-        resolvedPath.c_str(),
-        static_cast<int>(resolvedPath.size()),
-        &result[0],
-        utf8Size,
-        nullptr,
-        nullptr
-    );
+        CP_UTF8, 0, resolvedPath.c_str(), static_cast<int>(resolvedPath.size()),
+        &result[0], utf8Size, nullptr, nullptr);
 
     if (convertedSize <= 0) {
-        return "";
+        return {};
     }
 
     return result;
@@ -335,7 +364,7 @@ inline bool isInRange(T value, T min_val, T max_val) {
  *
  * @throws None (does not allocate; uses index-based erase).
  */
-inline void trim(std::string& text) {
+inline void trim(std::string &text) {
     // Manual lambda check, faster than std::isspace, but ignores locale
     bool (*isSpace)(char) = [](char character) -> bool {
         return character == ' ' || character == '\n' || character == '\r' ||
@@ -368,6 +397,76 @@ inline void trim(std::string& text) {
 }
 
 /**
+ * @brief Trims leading ASCII whitespace from a string in-place.
+ *
+ * Removes leading characters from the following set:
+ * space, \n, \r, \t, \v, \f.
+ *
+ * @param text String to be trimmed. Safe for a single thread, or multiple
+ * threads that do not modify @p text concurrently.
+ *
+ * @return None (modifies @p text in-place).
+ *
+ * @throws None (does not allocate; uses index-based erase).
+ */
+inline void ltrim(std::string &text) {
+    // Manual lambda check, faster than std::isspace, but ignores locale
+    bool (*isSpace)(char) = [](char character) -> bool {
+        return character == ' ' || character == '\n' || character == '\r' ||
+               character == '\t' || character == '\v' || character == '\f';
+    };
+
+    std::size_t start_index = 0;
+
+    // Find the first non-whitespace character from the beginning
+    while (start_index < text.size() && isSpace(text[start_index])) {
+        start_index++;
+    }
+
+    // If the string contains only whitespaces or is empty, clear it
+    if (start_index == text.size()) {
+        text.clear();
+        return;
+    }
+
+    text.erase(0, start_index);
+}
+
+/**
+ * @brief Trims trailing ASCII whitespace from a string in-place.
+ *
+ * Removes trailing characters from the following set:
+ * space, \n, \r, \t, \v, \f.
+ *
+ * @param text String to be trimmed. Safe for a single thread, or multiple
+ * threads that do not modify @p text concurrently.
+ *
+ * @return None (modifies @p text in-place).
+ *
+ * @throws None (does not allocate; uses index-based erase).
+ */
+inline void rtrim(std::string &text) {
+    // Manual lambda check, faster than std::isspace, but ignores locale
+    bool (*isSpace)(char) = [](char character) -> bool {
+        return character == ' ' || character == '\n' || character == '\r' ||
+               character == '\t' || character == '\v' || character == '\f';
+    };
+    std::size_t end_index = text.size();
+
+    // Find the last non-whitespace character from the end
+    while (end_index > 0 && isSpace(text[end_index - 1])) {
+        end_index--;
+    }
+
+    if (end_index == 0) {
+        text.clear();
+        return;
+    }
+    // Remove trailing and leading whitespaces
+    text.erase(end_index);
+}
+
+/**
  * @brief Replaces all occurrences of a substring in a string (in-place).
  *
  * Searches @p text for non-overlapping occurrences of @p old_substr and
@@ -391,7 +490,7 @@ inline void trim(std::string& text) {
  * if the resulting string would exceed max_size().
  */
 inline void replaceAll(std::string &text, const std::string &old_substr,
-                          const std::string &new_substr) {
+                       const std::string &new_substr) {
     if (old_substr.empty() || text.empty()) {
         return;
     }
@@ -410,8 +509,8 @@ inline void replaceAll(std::string &text, const std::string &old_substr,
         const char *end = data + data_len - substr_len + 1;
         const char *pos = data;
         while (pos < end) {
-            pos = static_cast<const char *>(
-                std::memchr(pos, substr[0], static_cast<std::size_t>(end - pos)));
+            pos = static_cast<const char *>(std::memchr(
+                pos, substr[0], static_cast<std::size_t>(end - pos)));
             if (!pos) {
                 return nullptr;
             }
@@ -447,11 +546,11 @@ inline void replaceAll(std::string &text, const std::string &old_substr,
 
     // Large text path: count occurrences first to reserve exact memory
     if (text_length >= 4096) {
-        size_t occurrences = 0;
+        std::size_t occurrences = 0;
         const char *scan = text_data;
 
-        while ((scan = memFind(scan, text_length - (scan - text_data),
-                               old_data, old_sub_len)) != nullptr) {
+        while ((scan = memFind(scan, text_length - (scan - text_data), old_data,
+                               old_sub_len)) != nullptr) {
             occurrences++;
             scan += old_sub_len;
         }
@@ -461,14 +560,13 @@ inline void replaceAll(std::string &text, const std::string &old_substr,
         }
 
         if (new_sub_len > old_sub_len) {
-            size_t extra_space = occurrences * (new_sub_len - old_sub_len);
+            std::size_t extra_space = occurrences * (new_sub_len - old_sub_len);
             reserve_size = text_length + extra_space;
         }
         result.reserve(reserve_size);
 
         // Build the result by appending segments between matches
-        while ((found = memFind(text_data + start_pos,
-                                text_length - start_pos,
+        while ((found = memFind(text_data + start_pos, text_length - start_pos,
                                 old_data, old_sub_len)) != nullptr) {
             std::size_t match_pos = static_cast<std::size_t>(found - text_data);
             result.append(text, start_pos, match_pos - start_pos);
@@ -550,12 +648,55 @@ inline std::string toLowerCopy(std::string text) {
 }
 
 /**
- * @brief Checks whether the given string pointer is null or points to an empty string.
+ * @brief Converts all characters in a string to uppercase in-place.
+ *
+ * This function uses std::toupper, which is locale-aware and supports
+ * extended character sets depending on the current global locale.
+ *
+ * @param text String to be modified in-place. Safe for a single thread,
+ * or multiple threads that do not modify `text` concurrently.
+ */
+inline void toUpper(std::string &text) {
+    if (text.empty()) {
+        return;
+    }
+
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::toupper(character));
+                   });
+}
+
+/**
+ * @brief Returns an uppercase copy of the given string.
+ *
+ * Creates a copy of the input string and converts each character to
+ * uppercase using std::toupper.
+ *
+ * @param text String to copy and convert to uppercase.
+ * @return Uppercase copy of the input string.
+ */
+inline std::string toUpperCopy(std::string text) {
+    if (text.empty()) {
+        return text;
+    }
+
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::toupper(character));
+                   });
+
+    return text;
+}
+
+/**
+ * @brief Checks whether the given string pointer is null or points to an empty
+ * string.
  *
  * @param text Pointer to the string to check.
  * @return True if the pointer is null or the string is empty; otherwise false.
  */
-inline bool isNullOrEmpty(const std::string* text) {
+inline bool isNullOrEmpty(const std::string *text) {
     return text == nullptr || text->empty();
 }
 
@@ -565,32 +706,70 @@ inline bool isNullOrEmpty(const std::string* text) {
  * @param text String to check.
  * @return True if the string is empty; otherwise false.
  */
-inline bool isNullOrEmpty(const std::string& text) {
-    return text.empty();
-}
+inline bool isNullOrEmpty(const std::string &text) { return text.empty(); }
 
 /**
- * @brief Checks whether the given string pointer is null or contains only whitespace characters.
+ * @brief Checks whether the given string pointer is null or contains only
+ * whitespace characters.
  *
  * @param text Pointer to the string to check.
- * @return True if the pointer is null or the string contains only whitespace characters; otherwise false.
+ * @return True if the pointer is null or the string contains only whitespace
+ * characters; otherwise false.
  */
-inline bool isNullOrWhiteSpace(const std::string* text) {
-    return text == nullptr || std::all_of(text->begin(), text->end(), [](unsigned char ch) {
-        return std::isspace(ch);
-    });
+inline bool isNullOrWhiteSpace(const std::string *text) {
+    return text == nullptr ||
+           std::all_of(text->begin(), text->end(),
+                       [](unsigned char ch) { return std::isspace(ch); });
 }
 
 /**
  * @brief Checks whether the given string contains only whitespace characters.
- *
+ *\
  * @param text String to check.
- * @return True if the string is empty or contains only whitespace characters; otherwise false.
+ * @return True if the string is empty or contains only whitespace characters;
+ * otherwise false.
  */
-inline bool isNullOrWhiteSpace(const std::string& text) {
-    return std::all_of(text.begin(), text.end(), [](unsigned char ch) {
-        return std::isspace(ch);
-    });
+inline bool isNullOrWhiteSpace(const std::string &text) {
+    return std::all_of(text.begin(), text.end(),
+                       [](unsigned char ch) { return std::isspace(ch); });
+}
+
+/**
+ * @brief Appends text elements to an existing string, separated by separator.
+ *        Empty elements are skipped.
+ *
+ * @tparam Args Types convertible to std::string.
+ * @param text1 String to append to.
+ * @param separator Delimiter inserted between non-empty elements.
+ * @param texts Text elements to join.
+ */
+template <typename... Args, EnableIfConvertibleToString<Args...> = 0>
+inline void join(std::string &text1, const std::string &separator,
+                 Args... texts) {
+    if (sizeof...(texts) < 1) {
+        return;
+    }
+    details::joinImpl(separator, text1, texts...);
+}
+
+/**
+ * @brief Creates a new string by joining text elements with a separator.
+ *        Empty elements are skipped.
+ *
+ * @tparam Args Types convertible to std::string.
+ * @param separator Delimiter inserted between non-empty elements.
+ * @param texts Text elements to join.
+ * @return Joined string.
+ */
+template <typename... Args, EnableIfConvertibleToString<Args...> = 0>
+inline std::string joinCopy(const std::string &separator, Args... texts) {
+    if (sizeof...(texts) < 1) {
+        return {};
+    }
+
+    std::string result;
+    details::joinImpl(separator, result, texts...);
+    return result;
 }
 
 // #############################################################
@@ -654,14 +833,16 @@ inline PathType getType(const std::string &path,
     WIN32_FIND_DATAW find_data{};
     const HANDLE find_handle = FindFirstFileW(path_wide.c_str(), &find_data);
     bool is_symlink = false;
-    
-     if (find_handle != INVALID_HANDLE_VALUE) {
+
+    if (find_handle != INVALID_HANDLE_VALUE) {
         FindClose(find_handle);
-        is_symlink = (find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && find_data.dwReserved0 == IO_REPARSE_TAG_SYMLINK;
+        is_symlink =
+            (find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
+            find_data.dwReserved0 == IO_REPARSE_TAG_SYMLINK;
     }
 
     if (!follow_symlink && is_symlink) {
-            return PathType::Symlink;
+        return PathType::Symlink;
     } else if (is_symlink) {
         const std::string targetPath = details::getResolvedTargetPath(path);
         if (isNullOrEmpty(targetPath)) {
@@ -672,11 +853,16 @@ inline PathType getType(const std::string &path,
     }
 
     switch (file_info.st_mode & S_IFMT) {
-        case S_IFREG:  return PathType::File;
-        case S_IFDIR:  return PathType::Directory;
-        case S_IFIFO:  return PathType::Pipe;
-        case S_IFCHR:  return PathType::CharDevice;
-        default:       return PathType::Other;
+    case S_IFREG:
+        return PathType::File;
+    case S_IFDIR:
+        return PathType::Directory;
+    case S_IFIFO:
+        return PathType::Pipe;
+    case S_IFCHR:
+        return PathType::CharDevice;
+    default:
+        return PathType::Other;
     }
 }
 
