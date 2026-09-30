@@ -1,5 +1,9 @@
+// i-love-cpp (ilc) - https://github.com/Mateusz-Chwistek/i-love-cpp
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Mateusz-Chwistek
+//
 // Version: 1.0.0
-// Full docs: https://github.com/Mateusz-Chwistek/i-love-cpp/blob/main/DOCS.md
+// Full docs: https://github.com/Mateusz-Chwistek/i-love-cpp/blob/v1.0.0/DOCS.md
 
 #if !defined(I_LOVE_CPP_HPP)
 #define I_LOVE_CPP_HPP
